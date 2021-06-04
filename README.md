@@ -1,2 +1,2 @@
 # Greenhouse
-LoRa Greenhouse
+LoRa Greenhouse, readme to be updated...
