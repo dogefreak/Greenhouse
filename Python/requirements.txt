@@ -1,0 +1,3 @@
+#Requirements for mqqt-websocket
+paho-mqtt
+websocket-client
