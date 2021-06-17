@@ -8,6 +8,7 @@ Don't forget that this script will only run on TTN/TTS V3 and will not be develo
 The script has been developed to be deployed on Linux distributions (e.g. Ubuntu), and other operating systems are supported too. 
 While running this script on other operating systems please note that you have to fetch any SSL certificates manually for using encryption (which is advised!).
 For testing purposed you can temporarily disable SSL in the config file, but it's ill-advised to run it permanently in that configuration.
+
 This script will only run properly if you have the following tables in your OnlineDB.NET database:
 * id	
 * received	
