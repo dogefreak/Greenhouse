@@ -1,27 +1,74 @@
 #!/usr/bin/python3
 
-User = "APPLICATION@ttn" #Fill in Application
-Password = "NNSXS.5UPER.5ECRET.APIKEY" #Fill in MQTT API key/password
-Region = "EU1" #Or US, AU...
-topic  = "APPID" + "/devices/" + "DEVICEID" + "/down" #Fill in TTN APPID and DEVID
-OnlineDB = "9URUQbhWBglBLnP" #Fill in OnlineDB API key
-UseSSL = False
+#Imports:
+try:
+        import paho.mqtt.client as mqtt
+        import websocket
+        import json, csv, base64, sys, logging, time, os
+        from datetime import datetime
+        from threading import Thread 
+        from configparser import ConfigParser
+        
+except:
+        print("Missing critical package, or maybe you forgot to run 'pip install requirements.txt'")
 
-wsMessage = ""
-
-VER  = "2021-05-24 v1.0"
-import os, sys, logging, time
+VER  = "2021-05-24 v1.3"
 print(os.path.basename(__file__) + " " + VER)
 
-#Imports:
-import paho.mqtt.client as mqtt
-import json
-import csv
-from datetime import datetime
-import websocket
-from threading import Thread
-#import ssl
+#Global variables
+User = "APPLICATION@ttn"
+Password = "FILL ME IN (TTN MQTT API KEY)"
+Region = "EU1"
+nodeName = "FILL ME IN (END DEVICE NAME)"
+topic  = "v3/" + User + "/devices/" + nodeName +"/down/push"
+OnlineDB = "FILL ME IN (API KEY)"
+UseSSL = False #Use True while using Linux or fetch certs yourself
 
+wsMessage = ""
+here = os.path.dirname(os.path.abspath(__file__))
+configpath = os.path.join(here, 'config.ini')
+
+#Read settings from config file, or create file
+def settings():   
+    config = ConfigParser()
+    
+    #Create config file if it doesn't exist
+    def checkcreate(message):
+        global User, Password, Region, nodeName, OnlineDB, UseSSL
+        if not os.path.exists('config.ini'):
+            config['Configuration'] = {'Username': str(User),
+                                       'Password': str(Password),
+                                       'Region': str(Region),
+                                       'EndDevice': str(nodeName),
+                                       'OnlineDB': str(OnlineDB),
+                                       'UseSSL': str(UseSSL)
+                                       }
+            with open(configpath, 'w') as configfile:
+                config.write(configfile)
+                print(message)
+        
+
+    checkcreate("Config file was written in same path as this script!\n")
+
+    #Read config file and assign variables
+    def readconfig():
+        global User, Password, Region, nodeName, OnlineDB, UseSSL
+        config.read(configpath)
+
+        User = config.get('Configuration', 'Username')
+        Password = config.get('Configuration', 'Password')
+        Region = config.get('Configuration', 'Region')
+        nodeName = config.get('Configuration', 'EndDevice')
+        OnlineDB = config.get('Configuration', 'OnlineDB')
+        UseSSL = config.getboolean('Configuration', 'UseSSL')
+        topic  = "v3/" + User + "/devices/" + nodeName +"/down/push"
+
+    #Try to read config, if exception: remove config and create new one and read it again
+    try: readconfig()
+    except:
+        os.remove('config.ini')
+        checkcreate("Corrupted file detected, created new config!\n\n")
+        readconfig()
 
 # MQTT event functions
 def on_connect_mqtt(mqttc, obj, flags, rc):
@@ -40,17 +87,30 @@ def on_message_mqtt (mqttc, obj, msg):
         if uplink:
                 temperature = parsedJSON['uplink_message']['decoded_payload']['Temperature']
                 humidity = parsedJSON['uplink_message']['decoded_payload']['Humidity']
+                battery = parsedJSON['uplink_message']['decoded_payload']['Battery']
+                solar = parsedJSON['uplink_message']['decoded_payload']['Solar']
+                water = parsedJSON['uplink_message']['decoded_payload']['Water']
+                soil0 = parsedJSON['uplink_message']['decoded_payload']['Soil0']
+                soil1 = parsedJSON['uplink_message']['decoded_payload']['Soil1']
+                soil2 = parsedJSON['uplink_message']['decoded_payload']['Soil2']
+                soil3 = parsedJSON['uplink_message']['decoded_payload']['Soil3']
                 
-                print("\nMQTT:", parsedJSON['received_at'],"- Temperature:", temperature, "Humidity:", humidity)
+                if soil0 != "NaN" or "":
+                        soilAvg = (soil0 + soil1 + soil2 + soil3) / 4
+                        soilPerc = (soilAvg / 1023) * 100
+                else: soilPerc = 0
                 
-                wsMessage = '{"temp": "' + str(temperature) + '", "hum": "' + str(humidity) + '"}'
+                print("\nMQTT:", parsedJSON['received_at'],"- Temperature:", temperature, "Humidity:", humidity, "Battery:", battery, "Solar:", solar)
+                
+                wsMessage = '{"temp": "' + str(temperature) + '", "hum": "' + str(humidity) + '", "soc_batt": "' + str(battery) + '", "soc_solar": "' + str(solar) +'", "hum_soil":"' + str(soilPerc) + '", "temp_water":"' + str(water) +'"}'
 
                 ws.send(wsMessage)
 
                 uplink = False
 
 def on_publish_mqtt(mqttc, obj, mid):
-    print("\nMQTT: Message published to TTN...")
+        print("\nMQTT: Message published to TTN...")
+        pass
 
 def on_subscribe_mqtt(mqttc, obj, mid, granted_qos):
     #print("\nSubscribe: " + str(mid) + " " + str(granted_qos))
@@ -98,10 +158,24 @@ def MQTT(threadname):
             run = True
             while run:
                     mqttc.loop(1) # seconds timeout / blocking time
+                    #print("#", end="\n", flush=True)	# feedback to the user that something is actually happening
+                    
                     if "dev" in wsMessage:
-                        mqttc.publish(topic, wsMessage)
+                        downlink = "";
+                        if "pump" in wsMessage:
+                                if "start" in wsMessage: downlink = "AA==" #0
+                                if "stop" in wsMessage: downlink = "AQ==" #1
+                        if "tank" in wsMessage:
+                                if "start" in wsMessage: downlink = "AA==" #0
+                                if "stop" in wsMessage: downlink = "AQ==" #1
+                        if "plants" in wsMessage:
+                                if "start" in wsMessage: downlink = "Ag==" #2
+                                if "stop" in wsMessage: downlink = "Aw==" #3
+                        if "all" in wsMessage: toEncode = "BA==" #4
+   
+                        message  = '{"downlinks":[{"f_port": 1,"frm_payload":"' + downlink + '","priority": "NORMAL"}]}'
+                        mqttc.publish(topic,message)
                         wsMessage = "0"
-                    #print("#", end="\n", flush=True)	# feedback to the user that something is actually happening	
         
     except KeyboardInterrupt:
         print("Exit")
@@ -114,6 +188,9 @@ def on_message_ws(ws, message):
     global wsMessage
     wsMessage = message
     print(f"OnlineDB: {wsMessage}")
+    if "Sorry" in message:
+            time.sleep(2)
+            exit()
         
 
 def on_error_ws(ws, error):
@@ -139,12 +216,19 @@ def websocket_thread(threadname):
         ws.run_forever()
         time.sleep(10)
         print("Reconnecting to websocket...");
-            
-thread1 = Thread( target=MQTT, args=("MQTT Thread", ) )
-thread1.start()
 
-thread2 = Thread( target=websocket_thread, args=("WebSocket Thread", ) )
-thread2.start()
+def main():
+        settings()
+        try:          
+                thread1 = Thread( target=MQTT, args=("MQTT Thread", ) )
+                thread1.start()
 
-thread1.join()
-thread2.join()
+                thread2 = Thread( target=websocket_thread, args=("WebSocket Thread", ) )
+                thread2.start()
+
+                thread1.join()
+                thread2.join()
+        except:
+                pass
+
+main()        
